@@ -1,0 +1,464 @@
+---
+title: "AMA8"
+author: "Cecilia, Rudio, Gerard"
+date: "2023-12-23"
+output: html_document
+---
+
+```{r}
+library(ranger)
+library(randomForest)
+library(vip)
+library(gridExtra)
+library(vip)
+library(DALEX)
+library(DALEXtra)
+library(lime)
+library(iml)
+library(localModel)
+if (require(ghostvar)){library(ghostvar)}
+library(mgcv)
+library(gridExtra)
+```
+
+
+```{r cars}
+library(readxl)
+concrete <- as.data.frame(read_excel("Concrete_Data.xls"))
+DescVars <- names(concrete)
+names(concrete) <- c("Cement","Slag","FlyAsh","Water","Superplast",
+"CoarseAggr","FineAggr","Age","Strength")
+```
+
+```{r}
+set.seed(12345)
+train_idx <- sample(nrow(concrete), 700)
+train <- concrete[train_idx, ]
+test <- concrete[-train_idx, ]
+```
+
+
+##1.Fit a Random Forest
+
+```{r}
+split_criterion <- function(y, split.var=y){
+  y <- y[order(split.var)]
+  n <- length(y)
+  uni.spl.var <- sort(unique(split.var))
+  m <- length(uni.spl.var)
+  Q <- numeric(m+1)
+  Q[1] <- Q[m+1] <- (n-1)*var(y)
+  #Q[2] <- (n-2)*var(y[2:n])
+  for (i in 2:m){
+    ni <- sum(split.var<uni.spl.var[i])
+    Q[i] <- 
+      ifelse(ni>1,(ni-2)*var(y[1:ni]),0) + 
+      ifelse(n-ni>1, (n-ni)*var(y[(ni+1):n]),0)
+  }
+  #Q[m] <- (n-2)*var(y[1:(n-1)])
+  Q <- Q/Q[1]
+  wminQ <- which.min(Q)
+  return(list(Q=Q, split.var=split.var, 
+              split=mean(uni.spl.var[wminQ+c(-1,0)]),
+              Qsplit=Q[wminQ],
+              wminQ=wminQ/(m+1))
+         )
+}
+```
+
+
+```{r}
+aux <- split_criterion(train$Strength)
+Q0<-aux$Q
+m <- length(Q0)-1
+plot((0:m)/m,Q0, type="l", lty=2, 
+     xlab="Cumul. freq. of split variables",ylab="Split criterion")
+abline(h=1,col=8,lty=2)
+
+p <- dim(train)[2]-1
+splits <- numeric(p)
+Qsplits <- numeric(p)+1
+wminQ <- numeric(p)
+for (j in (1:p)[-(6:7)]){
+  aux <- split_criterion(train$Strength,split.var = train[,j+1])
+  Q<-aux$Q
+  #print(Q)
+  m <- length(Q)-1
+  splits[j] <- aux$split
+  Qsplits[j] <- aux$Qsplit
+  wminQ[j]<-aux$wminQ
+  lines((0:m)/m,Q, type="l", col=j, lty=j)
+}
+var.split <- which.min(Qsplits)
+abline(v=wminQ[var.split],col=var.split, lty=var.split)
+text(wminQ[var.split],(min(Q0)+Qsplits[var.split])/2,
+     names(train)[var.split+1],col=var.split,pos=4)
+```
+#a. Compute the Variable Importance by the reduction of the impurity at the splits defined by each variable.
+
+```{r}
+model_rf_imp<- ranger(
+  Strength~ .,
+  data = train, 
+  importance='impurity'
+)
+print(model_rf_imp)
+```
+The Ranger regression model was trained with 500 trees, 700 samples and 8 independent variables. 
+The out-of-bag prediction error, measured by mean squared error (MSE), is 33.73335, and the R-squared (OOB) value, which indicates the proportion of variance explained by the model, is 0.8785622.
+#b. Compute the Variable Importance by out-of-bag random permutations.
+
+```{r}
+model_rf_perm <- ranger(
+  Strength~ .,
+  data = train,  
+  importance='permutation'
+)
+print(model_rf_perm)
+```
+The out-of-bag (OOB) prediction error, measured by mean squared error (MSE), iss 34.23107, and the R-squared (OOB) value, indicating the proportion of variance explained by the model, is 0.8767705.
+#c. Do a graphical representation of both Variable Importance measures
+```{r}
+rf_imp_vip <- vip(model_rf_imp, num_features = 8)
+rf_perm_vip <- vip(model_rf_perm, num_features = 8)
+grid.arrange(rf_imp_vip, rf_perm_vip, ncol=2, top="Left: Reduction in impurity at splits. Right: Out-of-bag permutations")
+```
+On the left the is showing the variable importance based on the reduction in impurity at each split in the decision trees of your random forest.
+Age contributes more to reducing impurity, suggesting greater importance in making splits and improving the model's predictive performance.
+Age, cement and water have a more significant impact on the model.
+On the right, showing the variable importance based on out-of-bag permutations, age, cement and water on the right plot suggest that shuffling the values leads to a more significant drop in model performance. Theyare considered more important, as per their impact on model accuracy when their values are permuted.
+
+Age, cement and water conssitently appear in both plost and are likely robust contributors to the model's performance.
+#d. Compute the Variable Importance of each variable by Shapley Values
+```{r}
+rf_shapley <- vip(model_rf_imp, method="shap",
+                  pred_wrapper=yhat, num_features = 8,
+                  train = train, 
+                  newdata=test[,-9])
+grid.arrange(rf_imp_vip, rf_perm_vip, rf_shapley,
+             ncol=2, nrow=2,
+             top="Top left: Impurity. Top right: oob permutations. Bottom left: Shapley values"
+            )
+```
+The plot on the top left shows the variable importance based on the reduction in impurity at each split in the decision trees of your random forest. Age, cemnt and water indicate that contribute more to reducing impurity, suggesting greater importance in making splits and improving the model's predictive performance.
+The plot on the top right shows variable importance based on out-of-bag permutations, where the values of each feature are permuted to evaluate the model's performance.
+Age, cement water suggest that shuffling the values of them leads to a more significant drop in model performance, indicating the importance of those features.
+On the bottom left, shapley values provide a measure of the average contribution of each feature to the model's output across all possible permutations.
+All variables indicate a positive impact on the prediction.
+Again, age, cement and water are more influential in determining the model's predictions.
+
+##2. Fit a linear model
+
+#a. Summarize, numerically and graphically, the fitted models.
+```{r}
+lm_cement<- lm(Strength ~ ., data = train)
+(summ_lm_cement<- summary(lm_cement))
+```
+The R-squared value of 0.6028 indicates that the model explains approximately 60.28% of the variability in Strength and the low p-value for the F-statistic suggests that the overall model is statistically significant.
+```{r}
+library(mgcv)
+gam_cement <- gam(Strength ~ s(Slag) + s(FlyAsh) + s(Water) + s(Superplast) + s(CoarseAggr) + 
+                   s(FineAggr) + s(Age), 
+                 data = train)
+(summ_gam_cement <- summary(gam_cement))
+```
+The adjusted R-squared indicates that approximately 85.7% of the variability in the response variable is explained by the model. The high adjusted R-squared suggests that the model provides a good fit to the data, explaining a substantial proportion of the variability in Strength.
+```{r}
+plot(gam_cement)
+```
+#b. Compute the Variable Importance by Shappley values in the linear and gam fitted models. Compare your results with what you have learned before.
+```{r}
+lm_cement_shapley <- vip(lm_cement, method="shap",
+                  pred_wrapper=predict.lm,
+                  train=train, 
+                  newdata=test[,-9],
+                  num_features = 8,
+                  exact=TRUE)
+
+plot(lm_cement_shapley)
+```
+Features with larger absolute Shapley values have a more significant impact on the model's predictions, therefore Cement, slag and flyash are more significant fro the lm model.
+```{r}
+gam_cement_shapley <- vip(gam_cement, method="shap",
+                  pred_wrapper=predict.gam,
+                  train=train, 
+                  newdata=test[,-9],
+                  num_features = 8,
+                  exact=TRUE)
+
+plot(gam_cement_shapley)
+```
+Features with larger absolute Shapley values have a more significant impact on the model's predictions, therefore water (smoothed) has the most significance to the model but age, coarseaggr, fineaggr and flyash have very high similar significance as well.
+```{r}
+grid.arrange(rf_imp_vip, rf_shapley, 
+             lm_cement_shapley, gam_cement_shapley, 
+             ncol=2, nrow=2,
+             top="1,1: RF Impurity. 1,2: Shapley RF. 2,1: Shapley lm. 2,2: Shapley gam"
+)
+```
+It's a useful approach to visually assess and compare the relative importance of features in different modeling techniques. As it can be seen, for 1,1 and 1,2 most important features are age,cement and water. For 2,1, cement, slag, flyash and for 2,2 water,age and coarseaggr. The most common features are water, cement and age.
+##3. Relevance by Ghost Variables
+# For Gam model
+
+```{r}
+library(grid)
+source("relev.ghost.var.R")
+Rel_Gh_Var <- relev.ghost.var(model=gam_cement, 
+                              newdata = test[, -9],
+                              y.ts = test[, 9],
+                              func.model.ghost.var = lm
+)
+```
+
+```{r}
+plot.relev.ghost.var(Rel_Gh_Var,n1=330,ncols.plot = 4)
+```
+
+```{r}
+aux <- cbind(Rel_Gh_Var$relev.ghost,lm_cement_shapley$data$Importance)
+plot(aux[,1],aux[,2],col=0,xlab="Relev. by Ghost Variables",ylab="Shapley Var. Imp.")
+text(aux[,1],aux[,2],row.names(aux))
+```
+The second part plots the relevance by ghost variables.
+The third part creates a scatter plot comparing relevance by ghost variables with Shapley variable importance.
+#For lm model
+```{r}
+Rel_Gh_Var <- relev.ghost.var(model=lm_cement, 
+                              newdata = test[, -9],
+                              y.ts = test[, 9],
+                              func.model.ghost.var = lm
+)
+```
+
+```{r}
+plot.relev.ghost.var(Rel_Gh_Var,n1=330,ncols.plot = 4)
+```
+
+```{r}
+aux <- cbind(Rel_Gh_Var$relev.ghost,gam_cement_shapley$data$Importance)
+plot(aux[,1],aux[,2],col=0,xlab="Relev. by Ghost Variables",ylab="Shapley Var. Imp.")
+text(aux[,1],aux[,2],row.names(aux))
+```
+#For RF model
+```{r}
+
+Rel_Gh_Var <- relev.ghost.var(model=model_rf_imp, 
+                              newdata = test[, -9],
+                              y.ts = test[, 9],
+                              func.model.ghost.var = lm,
+                              isRanger=TRUE)
+```
+
+```{r}
+plot.relev.ghost.var(Rel_Gh_Var,n1=330,ncols.plot = 4)
+```
+
+```{r}
+aux <- cbind(Rel_Gh_Var$relev.ghost,rf_shapley$data$Importance)
+plot(aux[,1],aux[,2],col=0,xlab="Relev. by Ghost Variables",ylab="Shapley Var. Imp.")
+text(aux[,1],aux[,2],row.names(aux))
+```
+
+##4.  Global Importance Measures and Plots using the library DALEX
+
+#a. Compute Variable Importance by Random Permutations
+
+```{r}
+library(ingredients)
+explainer_rf <- explain.default(model = model_rf_imp,  
+                               data = test[, -9],
+                               y = test$Strength, 
+                               label = "Random Forest")
+
+Rnd_Perm <- model_parts(
+  explainer_rf,
+  N = NULL, 
+  B = 10  
+)
+
+Rnd_Perm
+```
+
+```{r}
+plot(Rnd_Perm)
+```
+It can be seen that the most important variable is the Age with a RMSE of around 14, followed by cement, and water. As seen before, age, cement and water make the models to be more accurate for this data. On the contrary, FlyAsh, CoarseAggr and FineAggr, will make the model to be less accurate 
+
+#b. Do the Partial Dependence Plot for each explanatory variable.
+```{r}
+PDP_rf <- model_profile(
+  explainer=explainer_rf,
+  variables = NULL, 
+  N = NULL, 
+  groups = NULL,
+  k = NULL,
+  center = TRUE,
+  type = "partial" 
+)
+
+plot(PDP_rf, facet_ncol=2)
+```
+Looking at the partial dependence profiles the following conclusions can be extracted:
+- For age, the concrete will be growing strong until it reaches 100 years, from so on, it's constant.
+- For cement, the increase is constant and proportionally positive, so if there is less cement, the concrete is less stronger.
+Regarding CoarseAggr, FineAggr and FlyAsh, it's pretty constant throughtout the values, meaning these compounds do not affect very much on the concrete's strength.
+- Slag has an impact with low values on the concrete but stays constant throughout the increase of it.
+- Finally Superplast does have an impact until reaching values 10 but stays constant and Water although it stays constant the first 150 value will later decrease on the concrete's strength as you put more water and will stay constant around value 180.
+
+# c. Do the Local (or Conditional) Dependence Plot for each explanatory variable
+
+```{r}
+CDP_rf <- model_profile(
+  explainer=explainer_rf,
+  variables = NULL,
+  N = NULL, 
+  groups = NULL,
+  k = NULL,
+  center = TRUE,
+  type = "conditional" 
+)
+
+plot(CDP_rf, facet_ncol=2)
+```
+There is not much difference between the partial and the conditional plot. Superlast does have a more constant increase, and CoarseAggr a more constant decrease. It can be concluded that superplast, age cement and water are the most important variables as they give the most change to the cement strength.
+
+# 5. Local explainers with library DALEX
+
+#Choose two instances in the the test set, the prediction for which we want to explain: • The data with the lowest value in Strength. • The data with the largest value in Strength
+
+```{r}
+lowest_value <- min(concrete$Strength)
+highest_value <- max(concrete$Strength)
+cat("Lowest Value:", lowest_value, "\n")
+cat("Highest Value:", highest_value, "\n")
+```
+
+```{r}
+tolerance <- 1e-6
+aux1 <- which(abs(concrete$Strength - 2.331808) < tolerance)
+lowest_value <- concrete[aux1, ]
+
+print(lowest_value)
+
+```
+
+
+```{r}
+tolerance <- 1e-5
+aux <- which(abs(concrete$Strength - 82.59922) < tolerance)
+highest_value <- concrete[aux, ]
+
+print(highest_value)
+
+```
+#a. Explain the predictions using SHAP
+```{r}
+library(iBreakDown)
+bd_rf <- predict_parts(explainer = explainer_rf,
+                 new_observation = lowest_value,
+                            type = "shap")
+
+bd_rf
+```
+```{r}
+plot(bd_rf)
+```
+It can be seen that almost all variables have a positive contribution with the exception of Water and Superplast for this low value in the dataset. The variable that contributes the most in reducing the strength of the concrete is Water, followed by Superlast.
+
+#b. Explain the predictions using Break-down plots
+```{r}
+bd_rf <- predict_parts(explainer = explainer_rf,
+                 new_observation = highest_value,
+                            type = "shap")
+
+bd_rf
+```
+```{r}
+plot(bd_rf)
+```
+It can be seen that all variables have a positive contribution, being age, cement and water the highest.
+#c. Explain the predictions using Break-down plots
+```{r}
+bd_rf <- predict_parts(explainer = explainer_rf,
+                 new_observation = lowest_value,
+                            type = "break_down")
+
+bd_rf
+```
+
+```{r}
+plot(bd_rf, max_features=9)
+```
+The break down plot for the lowest concrete strength, cement fineaggr and age do make the concrete increase strength but the rest are contributing negatively. The varaibles that contribute the most negatively are water and Superplast.
+```{r}
+bd_rf <- predict_parts(explainer = explainer_rf,
+                 new_observation = highest_value,
+                            type = "break_down")
+
+bd_rf
+```
+
+```{r}
+plot(bd_rf, max_features=9)
+```
+As shown before, for the highest value, all variables make the concrete's strength grow being age, water and cement the most contributing ones.
+#c. Explain the predictions using LIME
+```{r}
+library(partykit)
+library(libcoin)
+lime_rf <- predict_surrogate(explainer = explainer_rf, 
+                  new_observation = lowest_value[,-9], 
+                  type = "localModel")
+
+lime_rf 
+```
+```{r}
+plot(lime_rf)
+```
+The variables are all influencing negatively for the lowest value, except slag. 
+```{r}
+lime_rf <- predict_surrogate(explainer = explainer_rf, 
+                  new_observation = highest_value[,-9],  
+                  type = "localModel")
+
+lime_rf 
+```
+```{r}
+plot(lime_rf)
+```
+The most influential feature is the cement content over 313.3, followed by having the water under 169.63. Superplast is over 8.25, slag is over 162.13 and FlyAsh under 89.14. 
+#d. Do the Individual conditional expectation (ICE) plot, or ceteris paribus plot
+
+```{r}
+cp_rf <- predict_profile(explainer = explainer_rf, 
+                           new_observation = lowest_value)
+cp_rf
+```
+
+```{r}
+plot(cp_rf, facet_ncol=2)
+```
+For this plot tthe observation of lowest value is always at the lowest point of each line, therefore all variables contributing the most negatively.
+```{r}
+cp_rf <- predict_profile(explainer = explainer_rf, 
+                           new_observation = highest_value)
+cp_rf
+```
+
+```{r}
+plot(cp_rf, facet_ncol=2)
+```
+The observation is always at the highest point of the function, therefore all variables contributing the most positively
+# e.Plot in one graphic the Individual conditional expectation (ICE) plot for variable Age for eachcase in the test sample. Add the global Partial Depedence Plot
+```{r}
+mp_rf <- model_profile(explainer = explainer_rf,
+  variables = "Age",
+  N = 330,
+  type = "partial"
+)
+
+plot(mp_rf, geom = "profiles") +  
+  ggtitle("Ceteris-paribus and partial-dependence profiles for Strength") 
+```
+
+

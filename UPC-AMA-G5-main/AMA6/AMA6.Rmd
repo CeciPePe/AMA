@@ -1,0 +1,128 @@
+---
+title: "Untitled"
+author: "Cecilia, Rudio, and Gerard"
+date: "2023-11-22"
+output: html_document
+---
+
+```{r}
+load("bikes.Washington.Rdata")
+attach(bikes)
+```
+
+
+# 1.  Consider the nonparametric regression of cnt as a function of instant. Estimate the regression function m(instant) of cnt as a function of instant using a cubic regression spline estimated with the R function smooth.splines and choosing the smoothing para meter by Generalized Cross Validation.
+
+First of all x and y are defined being x the instant attribute and y the count attribute of the dataset. A smooth spline is fitted to the data and the corresponding plot is shown where the smooth spline curve can be observed.
+
+```{r}
+x <- instant
+y <- cnt
+# cv = FALSE to use generalized cross-validation
+spline <- smooth.spline(x,y, cv = FALSE, all.knots = FALSE)
+```
+
+## a) b) c) Smooth spline parameters by generalized cross validation
+
+The chosen penalty parameter $\lambda$, the corresponding number of degrees of freedom $df$ and the knots used $nk$ are shown bellow.
+
+```{r}
+print(paste0("a) Lambda = ", spline$lambda))
+print(paste0("b) DF = ", spline$df))
+print(paste0("c) Knots used = ", spline$fit$nk-2))
+```
+## d) Smooth spline regression plot
+
+```{r}
+plot(x= x, y=y)
+lines(spline,col=2,lwd=2)
+legend(x = "topleft",legend=c('scatter plot','estimated values'),col=c('black','red'), lty=1, cex=0.8 )
+```
+
+
+## 2. The script IRWLS logistic regression.R includes the definition of the function logistic.IRWLS.splines performing nonparametric logistic regression using splines with a IRWLS procedure. The basic syntax is the following:
+
+Before anything else, another variable is defined, where 1 is assigned to observations with a cnt attribute higher than 5000 and 0 otherwise.
+
+```{r}
+source("IRWLS_logistic_regression.R")
+cnt.5000 <- numeric(nrow(bikes))
+cnt.5000[cnt >= 5000] <- 1
+```
+
+### a) Spline logistic regression with $df=6$
+
+A non-parametric binary regression variable is fit with the logistic IRWLS splines function as a function of temperature and it can be noticed that for those temperatures with estimates higher than 0.5 of having more than 5000 for count, are temperatures between 20.74 and 32.35 degrees.
+
+```{r}
+result.splines = logistic.IRWLS.splines(x = temp,y = cnt.5000,df = 6)
+
+estimates <- result.splines$fitted.values
+sortedTemps <- sort(temp[estimates>0.5])
+print(paste0("We can see that in the range from ", min(sortedTemps)," to ", max(sortedTemps), " is where the probability of count larger or equal than 5000 is bigger than 0.5"))
+```
+
+### b) Determining the optimal $df$ with k-fold cross-validation
+
+We determine the optimal number of df with 5-fold cross validation. The results is subject to randomness and so we set the seed to 1.
+
+```{r}
+
+set.seed(1)
+
+k.fold.cv <- function(x,y,k=5,df){
+  n <- length(x)
+  Ik <- floor((0:(n-1))/(n/k))+1
+  ssr <- 0
+  for (i in (1:k)){
+    y.i <- y[Ik==i]
+    pred <- logistic.IRWLS.splines(x=x[Ik!=i],y=y[Ik!=i],x.new=x[Ik==i],df = df)$predicted.values
+    ssr <- ssr + sum(y.i*log(pred)+(1-y.i)*log(1-pred)) #sum(y.i*log(pred/(1-pred)) + log(1-pred))
+  }
+  k.cv <- ssr/n
+  return(k.cv)
+}
+
+df.k.fold.cv <- function(x,y,df.v = seq(3,14),k=5){
+  n <- length(x)
+  perm <- sample(1:n,size=n)
+  xperm <- x[perm]
+  yperm <- y[perm]
+
+  k.cv <- df.v*0
+  for (i in (1:length(df.v))){
+    df <- df.v[i]
+    k.cv[i] <- k.fold.cv(x=xperm,y=yperm,k=k,df=df)
+  }
+  return(list(k=k,df.v=df.v,k.cv=k.cv))
+}
+
+df.v = seq(3,14)
+cv = df.k.fold.cv(x=temp,y=cnt.5000,k=5,df.v=df.v)
+
+print(paste0("The best df is ", df.v[which.max(cv$k.cv)]))
+
+df.cv = df.v[which.max(cv$k.cv)]
+```
+
+```{r}
+plot(df.v,cv$k.cv)
+lines(df.v,cv$k.cv)
+points(df.v[which.max(cv$k.cv)],cv$k.cv[which.max(cv$k.cv)], col = "red")
+```
+
+Finally, the last plotting corresponds to the fitting of a logistic regression with spline terms using the best df . For more reference, the value of 0.5 for y is used.
+
+```{r}
+ord = order(temp)
+temp = temp[ord]
+cnt.5000 = cnt.5000[ord]
+
+s <- logistic.IRWLS.splines(x=temp,y=cnt.5000,df = df.cv)
+plot(temp,cnt.5000)
+lines(temp,s$fitted.values,col="red")
+abline(h = 0.5,col="blue")
+legend(x = "topleft",legend=c('scatter plot','estimated values',"P>0.5"),col=c('black','red','blue'), lty=1, cex=0.8 )
+
+```
+

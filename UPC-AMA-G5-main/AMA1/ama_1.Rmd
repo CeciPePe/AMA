@@ -1,0 +1,74 @@
+---
+title: "Lab1 : Density estimation"
+author: "AMA-G5"
+date: "2023-09-20"
+output: pdf_document
+---
+
+
+# Question 1
+
+Relation between the histogram estimator $$\hat{f}_{hist}(x)$$ and its leave one out version $$\hat{f}_{hist,(-i)}(x)$$ :
+
+$$ \hat{f}_{hist,(-i)}(x) = \frac{n}{n-1}\hat{f}_{hist}(x) - \frac{1}{(n-1)b} $$ 
+
+# Question 2
+
+```{r}
+cdrate.df <-read.table("cdrate.dat")
+head(cdrate.df)
+```
+
+
+```{r pressure, echo=FALSE}
+x = cdrate.df[,1]
+A = min(x) - .05*diff(range(x))
+Z = max(x) + .05*diff(range(x))
+nbr <- 7
+
+# histogram
+hx = hist(x,breaks=seq(A,Z,length=nbr+1),freq=F)
+show(hx)
+```
+
+```{r}
+# histogram function
+hx_f = stepfun(hx$breaks,c(0,hx$density,0))
+y = hx_f(x)
+
+hist(x,breaks=seq(A,Z,length=nbr+1),freq=F)
+points(x,y)
+
+```
+
+# Question 3
+
+```{r}
+
+fhist_loo = function(x,hist,f_h)
+{
+  # Computes the leave-one-out histogram estimator from data
+  
+  b <- hist$breaks[2]-hist$breaks[1]
+  n <- length(x)
+  f_i = 1:n
+  
+  for (i in 1:n)
+  {
+    f_i[i] = n/(n-1)*(f_h(x[i])-1/((n-1)*b))
+  }
+  
+  return(f_i)
+}
+
+y2 = fhist_loo(x,hx,hx_f)
+```
+
+
+```{r}
+hist(x,breaks=seq(A,Z,length=nbr+1),freq=F)
+points(x,y,pch=19,col="red")
+points(x,y2,col="green")
+legend(100,100,legend=c('f_hi','f_hi_loo'),col=c('red','green'),lty=1:2,cex=0.8)
+```
+

@@ -1,0 +1,370 @@
+---
+title: "AMA LAB 8 : Interpretability and Explainability in Machine Learning"
+author: "Cecilia, Rudio, Gerard"
+date: "2023-12-21"
+output: html_document
+---
+
+```{r}
+library(ranger)
+library(randomForest)
+library(caret)
+library(vip)
+library(DALEX)
+library(DALEXtra)
+library(lime)
+library(iml)
+library(localModel)
+# library(fastshap) # Attention! It re-define "explain" from DALEX
+if (require(ghostvar)){library(ghostvar)}
+library(mgcv)
+library(gridExtra)
+```
+
+
+```{r}
+library(readxl)
+concrete <- as.data.frame(read_excel("Concrete_Data.xls"))
+DescVars <- names(concrete)
+names(concrete) <- c("Cement","Slag","FlyAsh","Water","Superplast",
+"CoarseAggr","FineAggr","Age","Strength")
+
+set.seed(123456)
+I.train <- sort( sample(1:dim(concrete)[1],700,replace=FALSE) )
+concrete_train <- concrete[I.train,]
+concrete_test <- concrete[-I.train,]
+```
+
+# 1. Fit a random Forest:
+
+## a) Variable importance by Impurity
+
+```{r}
+rf_impurity <- ranger(Strength~.,data=concrete_train,importance = 'impurity')
+```
+
+## b) Variable importance by out-of-bag
+
+```{r}
+rf_oob <- ranger(Strength~.,data=concrete_train,importance = 'permutation')
+```
+
+## c) Graphical representation of both Variable Importance measures
+
+First we fit a model by the reduction of impurity. Then we fit a random forest model by out-of-bag random permutation. Now we visualize both variable importances.
+
+```{r}
+rf_imp_vip <- vip(rf_impurity, num_features = 8)
+rf_oob_vip <- vip(rf_oob, num_features = 8)
+grid.arrange(rf_imp_vip, rf_oob_vip, ncol=2, top="Left: Reduction in impurity at splits. Right: Out-of-bag permutations")
+```
+  
+Looking at both plots we can see they are very similar one to the other, Age is always the most important variable, followed by Cement, Water, and Superplast. Then we can see a change in the importance we can see that when the random forest is built with impurity, FineAggr is the next most important variable, followed by CoarseAggr and Slag. On the other hand, when the random forest build with out-of-bag random permutation we can see that the order is fist Slag, followed by FineAggr and CoarseAggr. FlyAsh is always the least important variable. 
+
+## d) Variable importance with Shapley values
+
+If we compute the variable importance using shapley values we would get the following plots:
+
+```{r}
+rf_imp_shapley <- vip(rf_impurity, method="shap",
+                  pred_wrapper=yhat, num_features = 8,
+                  train = concrete_train,
+                  newdata = concrete_test[,-9])
+
+rf_oob_shapley <- vip(rf_oob, method="shap",
+                  pred_wrapper=yhat, num_features = 8,
+                  train = concrete_train,
+                  newdata = concrete_test[,-9])
+
+grid.arrange(rf_imp_shapley, rf_oob_shapley, ncol=2, top="Left: Reduction in impurity at splits. Right: Out-of-bag permutations")
+```
+
+With the Shapley values, the results that we obtain are very similar for the two models. The main difference is that the ranks in importance between Slag and FineAggr are reversed between the two models. The similarity is logical as the two models are the same but they are constructed randomly.
+
+# 2. Fit a linear model and a gam model:
+
+## a) Summaries
+
+```{r}
+linearModel <- lm(Strength~., data = concrete_train)
+(summary_lm <- summary(linearModel))
+```
+```{r}
+model_gam <- gam(Strength~ s(Cement)+s(Slag)+s(FlyAsh)+s(Water)+s(Superplast)+s(CoarseAggr)+s(FineAggr)+s(Age),data=concrete_train)
+(summary_gam<-summary(model_gam))
+```
+```{r}
+plot(model_gam)
+```
+
+## b) Variable importance with Shapley values
+
+```{r}
+lm_shapley <- vip(linearModel, method="shap",
+                  pred_wrapper=predict.lm,
+                  train=concrete_train,
+                  newdata = concrete_test[,-9],
+                  num_features = 8,
+                  exact=TRUE)
+
+gam_shapley <- vip(model_gam, method="shap",
+                  pred_wrapper=predict.gam,
+                  train=concrete_train,
+                  newdata = concrete_test[,-9],
+                  num_features = 8,
+                  exact=TRUE)
+par(mfrow = c(1,2))
+
+grid.arrange(lm_shapley, gam_shapley, ncol=2, top="Left: Shapley values for the linear model. Right: Shaply values for the gam model")
+
+```
+
+Next here we can see the plot comparing the shaply values for the linear and gam model. Fist looking at the shaply for the linear model, we can see that the Cement is the most important variable, same can be seen in the gam model. As the second most important variable in the linear model, we can see it is the Slag followed by the FlyAsh, if we compare it with the previous model, we can see that in the linear model and the gam model, the FlyAsh is much more important the in this new models than with the random forest. Looking again at the linear model we can see that the fourth most important variable is the Age, comparing it to the other models, Age is much less important in the linear, as we can see age as the second most important variable in the gam and the most important variable in the all the random forest models. The fifth variable is the water and the fourth in the gam, but there is a gap in the importance, as in the linear we can see a value of around 2.6 and in the gam a value of around double. In the random forest, we can see water is a much more important variable. Lastly we have Superplast, FineAggr, and CoareAggr, in linear model variable importance order, are the least important varables, these are also the least important in the gam model. Compareing it to the random forest model, we can see that the superplast is a more improtant variable, as it is the fourth most important one.
+
+
+# 3. Relevance by ghost variables:
+
+## Linear Model
+
+```{r}
+library(grid)
+source("relev.ghost.var.R")
+Rel_Gh_Var.lm <- relev.ghost.var(model=linearModel, 
+                              newdata = concrete_test[, -9],
+                              y.ts = concrete_test[, 9],
+                              func.model.ghost.var = lm)
+
+plot.relev.ghost.var(Rel_Gh_Var.lm,n1=330,ncols.plot = 4)
+```
+
+Comparison linear model shaply value and ghost variables:
+
+```{r}
+aux <- cbind(Rel_Gh_Var.lm$relev.ghost,lm_shapley$data$Importance)
+plot(aux[,1],aux[,2],col=0,xlab="Relev. by Ghost Variables",ylab="Shapley Var. Imp.")
+text(aux[,1],aux[,2],row.names(aux))
+```
+
+First looking at the eigenvalues, we can see that the first 2 we can see that they explain the biggest part of the variability of the model. Then looking at the relevance by ghost variables plot, we can see that age is the most relevant one, followed by cement and slag. The first eigenvector we can see that its mostly explained by the positive contribution of the age. Regarding the second, we can see there are more variable involved, first we see that the most dominant variables involved are cement, slag and FlyAsh as positive contributors and we can also age as one of the negative contributos. Next, if we compare the shaply values with the relevance of the ghost variables we can see that ghost variable put age as a very important variable, but shaply values have it as a not important variable, also we see that both methods agree that cement is an important variable, regarding slag we see that when using shaply values it looks important but for the ghost variables is not as much.
+
+## Gam model
+
+```{r}
+Rel_Gh_Var.gam <- relev.ghost.var(model=model_gam, 
+                              newdata = concrete_test[, -9],
+                              y.ts = concrete_test[, 9],
+                              func.model.ghost.var = lm)
+
+plot.relev.ghost.var(Rel_Gh_Var.gam,n1=330,ncols.plot = 4)
+```
+
+Comparison shapley model values and ghost variables:
+
+```{r}
+aux <- cbind(Rel_Gh_Var.gam$relev.ghost,gam_shapley$data$Importance)
+plot(aux[,1],aux[,2],col=0,xlab="Relev. by Ghost Variables",ylab="Shapley Var. Imp.")
+text(aux[,1],aux[,2],row.names(aux))
+```
+
+Regarding the gam, we can see that the most important variables are Age and FlyAsh, the first being the most important one. Then we can also see cement, and FineAggr. Looking at the eigenvalues matrix, we can see that the fist and second explain most of the variability of the model. In the first component, we can see that the most important variable is a negative contribution of age. Next, focusing on the variability of the second eigen vector, we can see that FlyAsh, Slag , FineAggr, and Cement have a negative contribution to the model, on the other hand, we can see water has a positive contribution to the model. Finally, if we compare the Shapley variables and the ghost variables we can see that the age again is the most important variable in the ghost variables but the least important in the shapley values, on the other hand we can also see that the cement is a not very important variable in the ghost variables values but the most important variable in cement.
+
+## Random forest
+
+### Model for impurity importance measure
+
+```{r}
+source("relev.ghost.var.R")
+Rel_Gh_Var.rf_imp <- relev.ghost.var(model=rf_impurity, 
+                              newdata =  concrete_test[, -9],
+                              y.ts = concrete_test[, 9],
+                              func.model.ghost.var = lm,
+                              isRanger=TRUE)
+
+plot.relev.ghost.var(Rel_Gh_Var.rf_imp,n1=330,ncols.plot = 4)
+```
+
+Here we can see the ghost variables for the random forest impurity model. We can see that the most important variable is again age, then we can see that the FlyAsh is also an important variable, but the relevance between the Age and FlyAsh is a lot. Then, looking at the different eigenvalues, we can see that the first and second eigenvectors are the most important ones. Then looking at the first eigenvector, we can see that the most important variable is age, which has a negative contribution. Looking at the next eigenvector, we can see that the varaiables that contribute the most are cement, slag ,superplat, which have a positive contribution and water, which has a negative contribution
+
+```{r}
+aux <- cbind(Rel_Gh_Var.rf_imp$relev.ghost,rf_imp_shapley$data$Importance)
+plot(aux[,1],aux[,2],col=0,xlab="Relev. by Ghost Variables",ylab="Shapley Var. Imp.")
+text(aux[,1],aux[,2],row.names(aux))
+```
+
+### Model for out-of-bag importance measure
+
+```{r}
+Rel_Gh_Var.rf_oob <- relev.ghost.var(model=rf_oob, 
+                              newdata = concrete_test[, -9],
+                              y.ts = concrete_test[, 9],
+                              func.model.ghost.var = lm,
+                              isRanger=TRUE)
+
+plot.relev.ghost.var(Rel_Gh_Var.rf_oob,n1=330,ncols.plot = 4)
+```
+
+```{r}
+aux <- cbind(Rel_Gh_Var.rf_oob$relev.ghost,rf_oob_shapley$data$Importance)
+plot(aux[,1],aux[,2],col=0,xlab="Relev. by Ghost Variables",ylab="Shapley Var. Imp.")
+text(aux[,1],aux[,2],row.names(aux))
+```
+
+Lastly in this plot we can see the ghost varaibles for the random forest out-of-bag, we can see that the most important variable in the is model is Age, and we can also see that the most important eigenvactor is the first eigenvector, in which age has a negative contribution to the model.
+
+# 4. Global importance measures and plots using the library DALEX:
+
+```{r}
+explainer_rf <- explain.default(model = rf_impurity,  
+                               data = concrete_test[,-9],
+                               y = concrete_test[,9], 
+                               label = "Random Forest")
+```
+
+## a) Compute Variable Importance by Random Permutations
+
+```{r}
+(Rnd_Perm <- model_parts(
+  explainer_rf,
+  N = NULL, 
+  B = 10 
+))
+plot(Rnd_Perm)
+```
+
+In this plot we can see the random permutation plot. At first glance, we can see that the most important variable is the Age which has a RMSE of around 14, followed by cement, and water. This means that when the Age, Cement and water variable are used the model will be the most accurate. On the other hand, when the model uses other variables like FlyAsh, CoarseAggr and FineAggr, the model will be the least accurate.
+
+## b) Do the Partial Dependence Plot for each explanatory variable
+
+```{r}
+PDP_rf <- model_profile(
+  explainer=explainer_rf,
+  variables = NULL, N = NULL, 
+  groups = NULL, k = NULL,
+  center = TRUE, type = "partial")
+
+plot(PDP_rf, facet_ncol=2)
+```
+
+For the partial dependence plot each explanatory varaible. First regading the Age, we can see that the strength of the concrete will be most affected on th early years until the 100, form then on it saturates and stays the same. Next, looking at the cement, we can see there is a steady increase as the cement content increases, so the more cement there is the stronger the concrete will be. Moving on to the CoarseAggr we can see a slow decrease in the cement strength to the point of almost stopping at around 1000 to 1100. Next we have FineAggr, here we can again see a decrease in the strength of the concrete as the fineaggr increases, we can see that at the beging, from the 600 to the 700 it's not affected, but from there on the strength decreases. Then we have FlyAsh, and we can see how the strength again decreases slowly as the amount of FlyAsh increases. Looking now at the slag, can see a very slight increase in the strength of the concrete we can see that the strength has the most increase at the beginning, form 0 to around 25, form there on it stays almost the same. Then we have superplast that has a slow increase in the initial values, form 0 to 10, and form there on it stay almost the same. Last but not least, we have water, which have a steady state until the 150 value, and the decreases drastically in until the 200, and then stays the same until the 250. In the end, we can see the most change in the strngth in the age, cement, and water variables, this being in the end the most important ones.
+
+## c) Do the Local (or Conditional) Dependence Plot for each explanatory variable.
+
+```{r}
+CDP_rf <- model_profile(
+  explainer=explainer_rf,
+  variables = NULL,  N = NULL, 
+  groups = NULL, k = NULL,
+  center = TRUE, type = "conditional")
+
+plot(CDP_rf, facet_ncol=2)
+```
+
+We can see almost no difference between the partial and the conditional plot. We can see a differnce in the slag, which has a more parabolic shape having the maximum concrete strength at around the 40 mark in around the 200 slag, we can also see the slag has a contant increase instead of an increase form the 0 to 10 and then a constant strength. From this plot we can conclude that superplast, age cement and water are the most important variables as they are the one that give the most change to the cement strength.
+
+#  5. Local explainers with library DALEX
+
+We get the lowest and the highest strength values from the test set:
+
+```{r}
+(lowestStrength <- concrete_test[which.min(concrete_test$Strength),])
+(highestStrength <- concrete_test[which.max(concrete_test$Strength),])
+```
+
+## a) Explain the predictions using SHAP:
+
+```{r}
+(bd_rf_lowest <- predict_parts(explainer = explainer_rf,
+                 new_observation = lowestStrength,
+                            type = "shap"))
+
+plot(bd_rf_lowest)
+```
+
+We can see that almost all variables have a negative contribution with the exception of slag and FlyAsh. We can also see that the variable that contributes the most in reducing the strength of the concrete is the Age, followed by the cement and the water. We can also see that the Superplast of 0 has a negative contribution.
+
+
+```{r}
+(bd_rf_highest <- predict_parts(explainer = explainer_rf,
+                 new_observation = highestStrength,
+                            type = "shap"))
+plot(bd_rf_highest)
+```
+
+In this plot we can see the shapl values for the observation with the highest concrete strength. Here we can see that all variables have a positive contribution, the variable that is contributing the most is Age, Cement and Water, then we have superplast, Flyash, CoarseAggr and FineAggre.  
+
+##  b) Explain the predictions using Break-down plots:
+
+```{r}
+(bdown_rf_lowest <- predict_parts(explainer = explainer_rf,
+                 new_observation = lowestStrength,
+                            type = "break_down"))
+plot(bdown_rf_lowest)
+```
+
+Here we can see the break-down plot for the lowest concrete strength, we can see also that almost none of the variables is making the prediction value increase, all of them are contributing negatively except for Slag that has a litte positve contribution. The variables that contribute the most negatively are Age, cement and superplast.  
+
+
+```{r}
+(bdown_rf_highest <- predict_parts(explainer = explainer_rf,
+                 new_observation = highestStrength,
+                            type = "break_down"))
+plot(bdown_rf_highest)
+```
+
+Regarding the highest strength concrete break-down plot we can see how in this case all variables are contributing positively. The variables that contibute the most are the Age, water and cement.
+
+## c) Explain the predictions using LIME:
+
+```{r}
+(lime_rf_lowest <- predict_surrogate(explainer = explainer_rf, 
+                  new_observation = lowestStrength[,-9], 
+                  type = "localModel"))
+
+plot(lime_rf_lowest)
+```
+
+Here we can see the LIME plot for the lowest strength cement. We can see that the condition that makes the prediction reduce the most is Cement under the 255.5, the we see that the water content over 175.5 also contributes in reducing the cement strength. Then lower that 4.65 superplast content and over 816.8 FineAggr content also reduce a the strength of the cement lastly we can see that FlyAsh under 94 and Slag between 81,3 and 105.77 contribute positively. So in conclusion we can see that concrete with low cement by a lot of water reduce the most the concrete strenght.
+
+```{r}
+(lime_rf_highest <- predict_surrogate(explainer = explainer_rf, 
+                  new_observation = highestStrength[,-9], 
+                  type = "localModel"))
+
+plot(lime_rf_highest)
+```
+Next looking at the highest concrete strength lime plot, we can see that the most influential feature is having the FIneAggr under 762.36, followed by having the superplast over 8.33. It is interesting to observe that cement is not the most influential parameter but only the fourth.
+
+##  d) Do individual conditional expectation (ICE) plot, or ceteris paribus plot:
+
+```{r}
+(cp_rf_lowest <- predict_profile(explainer = explainer_rf, 
+                           new_observation = lowestStrength))
+plot(cp_rf_lowest)
+```
+
+For this plot we can see how the observation is always at the lowest point of each line, therefore all variables contributing the most negatively.
+
+```{r}
+(cp_rf_highest <- predict_profile(explainer = explainer_rf, 
+                           new_observation = highestStrength))
+plot(cp_rf_highest)
+```
+
+In this plot we can see the complete opposite from the previous plot we can see that the observation is always at the highest point of the function, therefore all variables contributing the most positively.
+
+## e) Plot the ICE plot for variable age for each case in the test sample. Add the global Partial Dependence Plot:
+
+```{r}
+mp_rf <- variable_profile(explainer = explainer_rf,
+  variables = "Age",
+  N = 330,
+  type = "partial"
+)
+
+plot(mp_rf, geom = "profiles") +  
+  ggtitle("Ceteris-paribus and partial-dependence profiles for temp") 
+```
+
+On the partial dependence plot we can observe that the strength prediction increases we the age increases between 0 and 100. Past the age of 100, the prediction are constant at their maximum. The partial dependence plot appears to be near to the center of the ICE plots. 
+
+

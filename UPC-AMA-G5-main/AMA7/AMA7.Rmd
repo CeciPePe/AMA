@@ -1,0 +1,136 @@
+---
+title: "AMA8"
+author: "Cecilia, Rudio and Gerard"
+date: "2023-12-06"
+output: html_document
+---
+
+
+```{r pressure, echo=FALSE}
+library(mgcv)
+hirs <- read.table("hirsutism.dat",header=T, sep="\t",fill=TRUE)
+
+hirs$Treatment <- as.factor(hirs$Treatment)
+```
+
+
+```{r pressure, echo=FALSE}
+summary(hirs)
+```
+
+
+```{r pressure, echo=FALSE}
+attach(hirs)
+
+boxplot(hirs[,2:5])
+
+par(mfrow=c(2,2))
+boxplot(hirs[,2]~Treatment,ylim=c(0,30), main=names(hirs)[2], xlab="Treatment")
+boxplot(hirs[,3]~Treatment,ylim=c(0,30), main=names(hirs)[3], xlab="Treatment")
+boxplot(hirs[,4]~Treatment,ylim=c(0,30), main=names(hirs)[4], xlab="Treatment")
+boxplot(hirs[,5]~Treatment,ylim=c(0,30), main=names(hirs)[5], xlab="Treatment")
+par(mfrow=c(1,1))
+
+par(mfrow=c(2,2))
+boxplot(hirs[Treatment==0,2:5],ylim=c(0,30), main="Treatment 0")
+boxplot(hirs[Treatment==1,2:5],ylim=c(0,30), main="Treatment 1")
+boxplot(hirs[Treatment==2,2:5],ylim=c(0,30), main="Treatment 2")
+boxplot(hirs[Treatment==3,2:5],ylim=c(0,30), main="Treatment 3")
+par(mfrow=c(1,1))
+```
+
+## Part 1: Modeling FGm12
+
+First we try a model with all the variables and without smoothing
+
+```{r}
+mod1 <- gam(FGm12~SysPres+DiaPres+weight+height+FGm0+Treatment, data = hirs)
+summary(mod1)
+```
+Looking at the summary, we can see that the only significant variable is FGm0. All the other variables, SysPres, DiaPres,weight, and height are not significant. Next we try the same model but with all the variables smoothed:
+
+```{r}
+mod1s <- gam(FGm12~s(SysPres)+s(DiaPres)+s(weight)+s(height)+s(FGm0)+Treatment, data = hirs)
+summary(mod1s)
+plot(mod1s,pages=1,residuals=TRUE, shade=TRUE, cex=2, lwd=2)
+```
+As a result of this model we can see that again we have the FGm0 variable significant, and also we have now the intercept.
+
+```{r}
+par(mfrow = c(2,2))
+gam.check(mod1s)
+```
+We can clearly see that the residuals have a parabolic shape, therefore we could sqrt the FGm12 in order to see if the residuals distribution improves.
+
+
+```{r}
+mod1sqrts <- gam(sqrt(FGm12)~s(SysPres)+s(DiaPres)+s(weight)+s(height)+s(FGm0)+Treatment, data = hirs)
+summary(mod1sqrts)
+par(mfrow = c(2,2))
+gam.check(mod1sqrts)
+```
+
+Looking at the plots for the sqrt model, we can see an improvement in the plots. First we can see that the residuals follow a normal distribution. We also lost the parabolic pattern there was in the resids vs linear pred.
+
+```{r}
+mod1sqrts.1 <- gam(sqrt(FGm12)~s(FGm0)+Treatment, data = hirs)
+summary(mod1sqrts.1)
+plot(mod1sqrts.1,pages=1,residuals=TRUE, shade=TRUE, cex=2, lwd=2)
+```
+
+As a next step we want to try to add the interaction between the variables and the treatment
+
+```{r}
+mod1sqrts.2 <- gam(sqrt(FGm12)~s(FGm0,by=Treatment), data = hirs)
+summary(mod1sqrts.2)
+par(mfrow = c(2,2))
+gam.check(mod1sqrts.2)
+```
+We can see how we are loosing the normality in the residuals. We can also see that the smooth Systolic Preassure is no significant, so lets try to remove it and look at how it affects the model.
+
+```{r}
+anova(mod1sqrts.1, mod1sqrts.2,test='F')
+```
+As the anova is not significant the simpler model is better, so the model without the interaction
+
+```{r}
+mod2sqrts.1 <- gam(sqrt(FGm12)~te(FGm0,DiaPres) + Treatment, data = hirs)
+summary(mod2sqrts.1)
+```
+
+
+```{r}
+mod2sqrts.2 <- gam(sqrt(FGm12)~te(FGm0,SysPres) + Treatment , data = hirs)
+summary(mod2sqrts.2)
+```
+
+
+```{r}
+mod2sqrts.3 <- gam(sqrt(FGm12)~te(FGm0,weight) + Treatment, data = hirs)
+summary(mod2sqrts.3)
+```
+
+
+```{r}
+mod2sqrts.4 <- gam(sqrt(FGm12)~te(FGm0,height) + Treatment , data = hirs)
+summary(mod2sqrts.4)
+```
+
+```{r}
+AIC(mod1sqrts.1,mod2sqrts.1,mod2sqrts.2,mod2sqrts.3,mod2sqrts.4)
+```
+Out of all this models, the best one is the model with Treatment, and a tensor of FGm0 and height, as it is the one with the lowest AIC
+
+
+
+## Part II modeling: Treatment
+
+
+
+
+
+
+
+
+
+

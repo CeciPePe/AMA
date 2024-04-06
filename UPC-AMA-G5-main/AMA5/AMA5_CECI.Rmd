@@ -1,0 +1,84 @@
+---
+title: "AMA Lab 5: Local Poisson Regression"
+author: "Cecilia, Rudio, Gerard"
+date: "2023-11-18"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(sm)
+countries<-read.csv2(file="HDI.2017.subset.csv",row.names = 1)
+attach(countries)
+head(countries)
+```
+```{r}
+summary(countries)
+```
+```{r}
+plot(countries[,2:7])
+```
+```{r}
+ind.agr<-(Agric.employ.. < median(Agric.employ..))
+```
+
+
+## 1. Bandwidth choice for the local Poisson regression
+
+```{r cars}
+
+loglik.CV.pois <- function(x,y,h){
+  n <- length(x)
+  pred <- sapply(1:n, 
+      function(i,x,y,h){
+         sm.poisson(x=x[-i],y=y[-i],h=h,eval.points=x[i],display="none")$estimate
+      },   x,y,h)
+  return(1/n * sum(log(pred)))#I have my doubts for this line(I checked gerards' also but idk why i feel like smt is missing)
+}
+
+
+h.cv.sm.pois <- function(x,y,rg.h=NULL,l.h=10,method=loglik.CV.pois){
+   cv.h <- numeric(l.h)
+   if (is.null(rg.h)){
+      hh <- c(h.select(x,y,method="cv"),
+              h.select(x,y,method="aicc"))#,hcv(x,y))
+      rg.h <- range(hh)*c(1/1.1, 1.5)
+   }
+   i <- 0
+   gr.h <- exp( seq(log(rg.h[1]), log(rg.h[2]), l=l.h))
+   for (h in gr.h){
+      i <- i+1
+      cv.h[i] <- method(x,y,h)
+   }
+   return(list(h = gr.h, 
+               cv.h = cv.h, 
+               h.cv = gr.h[which.min(cv.h)]))
+}
+```
+
+## 2. Local Poisson regression for Country Development Data
+
+```{r}
+countries$le.fm.r <- round(countries$le.fm)
+```
+
+```{r}
+h.CV.pois.lefm <- h.cv.sm.pois(Life.expec, le.fm.r, method = loglik.CV.pois)
+```
+
+
+```{r}
+plot(h.CV.pois.lefm$h, h.CV.pois.lefm$cv.h, 
+     xlab = "Bandwidth (h)", ylab = "Cross-validated Log-Likelihood",
+     main = "Cross-validated Log-Likelihood vs Bandwidth")
+lines(h.CV.pois.lefm$h, h.CV.pois.lefm$cv.h)
+points(h.CV.pois.lefm$h.cv, min(h.CV.pois.lefm$cv.h), col = "red", pch = 16)
+```
+
+```{r}
+pois_fit <- sm.poisson(Life.expec,le.fm.r, h = h.CV.pois.lefm$h.cv, main="Local Poisson Regression",xlab = "Life Expectancy", ylab = "Rounded le.fm")
+
+```
+

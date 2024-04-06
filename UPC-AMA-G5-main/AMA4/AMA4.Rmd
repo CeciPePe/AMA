@@ -1,0 +1,141 @@
+---
+title: "Estimating the conditional variance by local linear regression"
+author: "AMA-G5 : Gerard Gómez, Rudio Fida Cyrille, Cecilia Pérez"
+date: "2023-11-08"
+output: html_document
+---
+
+```{r}
+library(sm)
+data(aircraft)
+help(aircraft)
+attach(aircraft)
+lgPower <- log(Power)
+lgSpan <- log(Span)
+lgLength <- log(Length)
+lgWeight <- log(Weight)
+lgSpeed <- log(Speed)
+lgRange <- log(Range)
+```
+
+```{r}
+op<-par(mfrow=c(3,2))
+plot(Yr,lgPower)
+plot(Yr,lgSpan)
+plot(Yr,lgLength)
+plot(Yr,lgWeight)
+plot(Yr,lgSpeed)
+plot(Yr,lgRange)
+par(op)
+
+```
+
+# Ex: estimate the variance of lgWeight (y) given Yr (x)
+
+## With locpolreg function and leave-one-out cross validation
+
+First we load the locpolreg library:
+```{r}
+source("locpolreg.R")
+```
+
+After, the prediction mean squared error is calculated at different combinations of bandwidth and q values and it indicates that the lowest PMSE is registered in the matrix matHQ when h is 4.18 ≈ 4.
+
+```{r}
+h.v <- exp(seq(log(diff(range(Yr))/20),log(diff(range(Yr))/4),l=10))
+vecH <- numeric(length(h.v))
+
+for(j in 1:length(h.v)){
+  PMSE <- 0
+  for(k in 1:length(Yr)){
+    mx <- locpolreg(x=Yr[-k],y=lgWeight[-k],h=h.v[j],q=1,r=0,tg = Yr[k],doing.plot = F)$mtgr
+    PMSE <- PMSE + (lgWeight[k]-mx)^2
+  }
+  vecH[j] <- PMSE
+}
+
+h.v[which.min(vecH)]
+
+```
+
+Locpolreg is applied on the original data considering x as Year and y as the loglikelihood of Weight. Afterwards, squared errors are registered and transformed. Finally the locpolreg is performed on the transformed error. 
+
+```{r}
+mx <- locpolreg(x=Yr,y=lgWeight,h=4.185346,q=1,r=0,tg = Yr,doing.plot = F)$mtgr
+esq <- (lgWeight - mx)^2
+zi <- log(esq)
+```
+
+This section performs a cross-validation loop to select the best h. It uses zi as it is the transformed response variable and then fits local polynomial regression models, using LOOCV. The PMSE is calculated as the squared difference between the transformed response variable and the predicted value. 
+VecH stores these measures for each h (bandwidth).
+Finally, the optimal h is selected for the minimum vech and fits the final local polynomial regression model.
+
+```{r}
+vecH <- numeric(length(h.v))
+
+for(j in 1:length(h.v)){
+  PMSE <- 0
+  for(k in 1:length(Yr)){
+    mxi <- locpolreg(x=Yr[-k],y=zi[-k],h=h.v[j],q=1,r=0,tg = Yr[k],doing.plot = F)$mtgr
+    PMSE <- PMSE + (zi[k]-mxi)^2
+  }
+  vecH[j] <- PMSE
+}
+
+qx <- locpolreg(x=Yr,y=zi,h=h.v[which.min(vecH)],q=1,r=0,doing.plot = F)$mtgr
+```
+
+Below the plotting of original data against squared errors appears together with the line-plot of the exponential of transformed errors.
+
+```{r}
+plot(Yr,esq)
+lines(Yr,exp(qx),col="red")
+legend(x = "topleft",legend=c('estimated square residuals','estimated conditional variance'),col=c('black','red'), lty=1, cex=0.8 ) 
+```
+Furtheremore, the original data is plotted against the local polynomial regression predictions. The blue line indicates the upper confidence bound and the red the lower bound.
+
+```{r}
+plot(Yr,lgWeight,col='violet')
+lines(Yr,mx,type = 'l',ylim = c(7,12))
+lines(Yr,mx+1.96*sqrt(exp(qx)),col="blue")
+lines(Yr,mx-1.96*sqrt(exp(qx)),col="red")
+legend(x = "topleft",legend=c('original values','estimated values of y','upper band','lower band'),col=c('violet','black','blue','red'), lty=1, cex=0.8 )
+```
+
+## Use the function sm.regression from library sm and choose all the bandwidth values you need by direct plug-in
+
+The same process is applied this time using sm.regression from sm. Using dpill the optimal h value is calculated and then used for the sm.regression.
+
+```{r}
+library(sm)
+library(KernSmooth)
+h <- dpill(x=Yr,y=lgWeight)
+mx <- sm.regression(x=Yr,y=lgWeight,h=h,eval.points = Yr)$estimate
+esq <- (lgWeight - mx)^2
+zi <- log(esq)
+
+h_zi <- dpill(x=Yr,y=zi)
+qx <- sm.regression(x=mx,y=zi,h=h_zi,eval.points = mx)$estimate
+```
+
+The plotting of Yr against the esq (estimated square residuals). In red, the estimated conditional variance is line-plotted.
+```{r}
+plot(Yr,esq)
+lines(Yr,exp(qx),col="red")
+legend(x = "topleft",legend=c('estimated square residuals','estimated conditional variance'),col=c('black','red'), lty=1, cex=0.8 )
+```
+
+```{r}
+plot(Yr,lgWeight,col='violet')
+lines(Yr,mx,type = 'l')
+lines(Yr,mx+1.96*sqrt(exp(qx)),col="blue")
+lines(Yr,mx-1.96*sqrt(exp(qx)),col="red") 
+legend(x = "topleft",legend=c('original values','estimated values of y','upper band','lower band'),col=c('violet','black','blue','red'), lty=1, cex=0.8 ) 
+
+```
+
+After having both plots of x against the local polynomial regression predictions for both locpolreg and sm.regression, the following conclusions can be presented for this dataset:
+
+- For estimated values of y the curve is fittiest in the usage of locpolreg, while the estimated values of y are undefitted using sm.regression in comparison.
+
+- Furthermore, the chosen h is higher in the sm.regression method than locpolreg.
